@@ -126,7 +126,7 @@ const layerResult = await felt.createLayersFromGeoJson({
         size: 6,
       },
       config: { labelAttribute: ["name"] },
-      label: { minZoom: 0 },
+      label: { minZoom: 9 },
     }
   }
 });
