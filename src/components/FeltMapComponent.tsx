@@ -20,23 +20,17 @@ interface FeltMapComponentProps {
   showSidebar?: boolean;
 }
 
-// Extended controller interface to handle missing type definitions
-interface ExtendedFeltController extends FeltController {
-  destroy?: () => void;
-  createLayer?: (options: any) => Promise<any>;
-  fitBounds?: (options: any) => Promise<any>;
-}
-
 export default function FeltMapComponent({
   mapId,
   title,
   points,
   showSidebar = true,
 }: FeltMapComponentProps) {
-  const [felt, setFelt] = useState<ExtendedFeltController | null>(null);
+  const [felt, setFelt] = useState<FeltController | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
   const mapRef = useRef<HTMLDivElement>(null);
+  const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
 
   // Initialize Felt map
   useEffect(() => {
@@ -58,7 +52,7 @@ export default function FeltMapComponent({
         
         // Create the Felt map instance
         const feltInstance = await Felt.embed(mapRef.current, mapId, embedOptions);
-        setFelt(feltInstance as ExtendedFeltController);
+        setFelt(feltInstance);
         setIsLoading(false);
       } catch (error) {
         console.error("Error loading Felt map:", error);
@@ -68,80 +62,153 @@ export default function FeltMapComponent({
 
     loadFelt();
     
-    // Cleanup function
+    // No specific cleanup needed as Felt handles this internally
     return () => {
-      if (felt && typeof felt.destroy === 'function') {
-        felt.destroy();
-      }
+      // The iframe is automatically removed when the component unmounts
     };
   }, [mapId]);
 
-  // Add points to the map when they change or when the map is ready
+  // Convert points to GeoJSON and add to map when they change or when the map is ready
   useEffect(() => {
     async function addPointsToMap() {
       if (!felt || !points.length) return;
       
       try {
-        // Check if createLayer method exists
-        if (typeof felt.createLayer !== 'function') {
-          console.error("createLayer method not found on Felt controller");
-          return;
-        }
-        
-        // Create a new layer for the points
-        const layerName = `Sigma Data Points - ${new Date().toISOString()}`;
-        const layer = await felt.createLayer({
-          name: layerName,
-          type: "POINTS",
-        });
-        
-        // Add each point to the layer
-        for (const point of points) {
-          const { latitude, longitude, label, size, color } = point;
-          
-          // Set default style
-          const styleOptions: any = {
-            radius: size || 5,
-          };
-          
-          // Add color if provided
-          if (color) {
-            styleOptions.color = color;
-          }
-          
-          // Create the point - check if addPoint exists on layer
-          if (layer && typeof layer.addPoint === 'function') {
-            await layer.addPoint({
-              coordinates: {
-                lat: latitude,
-                lng: longitude,
+        // Convert points to GeoJSON format
+        const geojson = {
+          type: "FeatureCollection",
+          features: points.map((point, index) => {
+            const { latitude, longitude, label, color } = point;
+            
+            // Set properties based on point data
+            const properties: Record<string, any> = {
+              name: label || `Point ${index + 1}`,
+              id: `point-${index}`,
+            };
+            
+            // Add color if provided
+            if (color) {
+              properties.color = color;
+            }
+            
+            // Add size if provided
+            if (point.size !== undefined) {
+              properties.size = point.size;
+            }
+            
+            return {
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [longitude, latitude], // GeoJSON format is [lng, lat]
               },
-              name: label || `Point ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
-              style: styleOptions,
+              properties
+            };
+          })
+        };
+        
+// Convert your GeoJSON to a File object
+const jsonBlob = new Blob([JSON.stringify(geojson)], { type: "application/geo+json" });
+const geoJsonFile = new File([jsonBlob], "points.geojson", { type: "application/geo+json" });
+
+const layerResult = await felt.createLayersFromGeoJson({
+  name: `${title} - Data Points`,
+  source: {
+    type: "geoJsonFile",
+    file: geoJsonFile,
+  },
+  geometryStyles: {
+    Point: {
+      paint: { 
+        color: "#4c78a8",
+        size: 6,
+      },
+      config: { labelAttribute: ["name"] },
+      label: { minZoom: 0 },
+    }
+  }
+});
+
+        if (layerResult) {
+          // Get the bounds of all points to fit the viewport
+          const pointBounds = calculateBounds(points);
+          if (pointBounds) {
+            // Fit viewport to the bounds of all points with padding
+            await felt.fitViewportToBounds({
+              bounds: pointBounds
             });
-          } else {
-            console.error("addPoint method not found on layer");
           }
         }
-        
-        // Zoom to fit all points - check if fitBounds exists
-        if (typeof felt.fitBounds === 'function') {
-          await felt.fitBounds({
-            padding: 50,
-          });
-        } else {
-          console.error("fitBounds method not found on Felt controller");
-        }
-        
       } catch (error) {
         console.error("Error adding points to map:", error);
       }
     }
     
     if (felt && points.length) {
-      addPointsToMap();
+      // Get all existing layers and delete the ones we created previously
+      felt.getLayers().then(layers => {
+        // Filter for layers we likely created
+        const ourLayers = layers.filter(layer => 
+          layer && layer.name && layer.name.includes('Data Points')
+        );
+        
+        // Delete our previous layers
+        Promise.all(
+          ourLayers.map(layer => 
+            layer && felt.deleteLayer(layer.id)
+          )
+        ).then(() => {
+          // After clearing previous layers, add the new ones
+          addPointsToMap();
+        });
+      });
     }
-  }, [felt, points]);
+  }, [felt, points, title]);
+
+  // Handle clicking on a point in the sidebar
+  const handlePointClick = async (index: number) => {
+    if (!felt || !points[index]) return;
+    
+    setSelectedPoint(index);
+    
+    // Get the point data
+    const point = points[index];
+    
+    // Set the viewport to focus on this point
+    await felt.setViewport({
+      center: { 
+        latitude: point.latitude,
+        longitude: point.longitude
+      },
+      zoom: 12 // Reasonable zoom level for a single point
+    });
+    
+    // TODO: Select the feature if possible
+    // This would require tracking the layer ID and feature ID
+  };
+
+  // Calculate bounds for a set of points
+  const calculateBounds = (points: MapPoint[]): [number, number, number, number] | null => {
+    if (!points.length) return null;
+    
+    // Initialize with the first point
+    let minLng = points[0].longitude;
+    let minLat = points[0].latitude;
+    let maxLng = points[0].longitude;
+    let maxLat = points[0].latitude;
+    
+    // Find the min/max bounds
+    points.forEach(point => {
+      minLng = Math.min(minLng, point.longitude);
+      minLat = Math.min(minLat, point.latitude);
+      maxLng = Math.max(maxLng, point.longitude);
+      maxLat = Math.max(maxLat, point.latitude);
+    });
+    
+    // Add padding to the bounds (0.1 degrees)
+    const padding = 0.1;
+    return [minLng - padding, minLat - padding, maxLng + padding, maxLat + padding];
+  };
 
   return (
     <div className="felt-map-component h-full">
@@ -157,7 +224,12 @@ export default function FeltMapComponent({
             <ScrollArea className="h-[calc(100%-65px)]">
               {points.map((point, index) => (
                 <div key={index}>
-                  <div className="p-3 hover:bg-muted/50 cursor-pointer transition-colors">
+                  <div 
+                    className={`p-3 hover:bg-muted/50 cursor-pointer transition-colors ${
+                      selectedPoint === index ? 'bg-muted' : ''
+                    }`}
+                    onClick={() => handlePointClick(index)}
+                  >
                     <div className="font-medium">
                       {point.label || `Point ${index + 1}`}
                     </div>
