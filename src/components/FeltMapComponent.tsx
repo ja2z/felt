@@ -18,6 +18,7 @@ interface FeltMapComponentProps {
   title: string;
   points: MapPoint[];
   showSidebar?: boolean;
+  showLegend?: boolean;
 }
 
 export default function FeltMapComponent({
@@ -25,6 +26,7 @@ export default function FeltMapComponent({
   title,
   points,
   showSidebar = true,
+  showLegend = false,
 }: FeltMapComponentProps) {
   const [felt, setFelt] = useState<FeltController | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -45,8 +47,8 @@ export default function FeltMapComponent({
         const embedOptions: FeltEmbedOptions = {
           uiControls: {
             cooperativeGestures: false,
-            fullScreenButton: true,
-            showLegend: true,
+            fullScreenButton: false,
+            showLegend: showLegend,
           },
         };
         

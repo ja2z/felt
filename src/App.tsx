@@ -19,6 +19,7 @@ client.config.configureEditorPanel([
   { name: "mapId", type: "text", defaultValue: "xw9BxV0EmdR2u5C4AyrTke9CB" },
   { name: "title", type: "text", defaultValue: "Felt Map" },
   { name: "showSidebar", type: "checkbox", defaultValue: true },
+  { name: "showLegend", type: "checkbox", defaultValue: true },
   {
     name: "containerPadding",
     type: "dropdown",
@@ -55,6 +56,7 @@ function App() {
   const title = (client.config.getKey as any)("title") as string;
   const mapId = (client.config.getKey as any)("mapId") as string;
   const showSidebar = (client.config.getKey as any)("showSidebar") as boolean;
+  const showLegend = (client.config.getKey as any)("showLegend") as boolean;
   const containerPadding = (client.config.getKey as any)("containerPadding") as string;
   
   // Get column configurations
@@ -136,6 +138,7 @@ function App() {
           title={title}
           points={mapPoints}
           showSidebar={showSidebar}
+          showLegend={showLegend}
         />
       ) : (
         <div className="felt-loading-message">
