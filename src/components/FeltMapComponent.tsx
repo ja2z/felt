@@ -21,6 +21,20 @@ interface FeltMapComponentProps {
   showLegend?: boolean;
 }
 
+// Predefined color palette for categorical values
+const COLOR_PALETTE = [
+  "#4c78a8", // blue
+  "#f58518", // orange
+  "#e45756", // red
+  "#72b7b2", // teal
+  "#54a24b", // green
+  "#eeca3b", // yellow
+  "#b279a2", // purple
+  "#ff9da6", // pink
+  "#9d755d", // brown
+  "#bab0ac"  // gray
+];
+
 export default function FeltMapComponent({
   mapId,
   title,
@@ -33,6 +47,20 @@ export default function FeltMapComponent({
   const hasLoadedRef = useRef(false);
   const mapRef = useRef<HTMLDivElement>(null);
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
+
+  // Helper function to get color for a category
+  const getCategoryColor = (category: string | undefined): string => {
+    if (!category) return COLOR_PALETTE[0];
+    // Find the index of this category in the unique values
+    const uniqueValues = Array.from(new Set(
+      points
+        .map(point => point.color)
+        .filter(c => c !== undefined)
+    ));
+    const categoryIndex = uniqueValues.indexOf(category);
+    if (categoryIndex === -1) return COLOR_PALETTE[0];
+    return COLOR_PALETTE[categoryIndex % COLOR_PALETTE.length];
+  };
 
   // Initialize Felt map
   useEffect(() => {
@@ -68,7 +96,7 @@ export default function FeltMapComponent({
     return () => {
       // The iframe is automatically removed when the component unmounts
     };
-  }, [mapId]);
+  }, [mapId, showLegend]);
 
   // Convert points to GeoJSON and add to map when they change or when the map is ready
   useEffect(() => {
@@ -76,11 +104,19 @@ export default function FeltMapComponent({
       if (!felt || !points.length) return;
       
       try {
+        // Get all unique color categories to use for styling
+        const uniqueCategories = Array.from(new Set(
+          points.map(point => point.color).filter(Boolean)
+        ));
+        
+        // Determine if we should use dynamic sizing
+        const hasSizeData = points.some(point => point.size !== undefined);
+        
         // Convert points to GeoJSON format
         const geojson = {
           type: "FeatureCollection",
           features: points.map((point, index) => {
-            const { latitude, longitude, label, color } = point;
+            const { latitude, longitude, label, color, size } = point;
             
             // Set properties based on point data
             const properties: Record<string, any> = {
@@ -88,14 +124,14 @@ export default function FeltMapComponent({
               id: `point-${index}`,
             };
             
-            // Add color if provided
+            // Include the color category if available
             if (color) {
-              properties.color = color;
+              properties.category = color;
             }
             
             // Add size if provided
-            if (point.size !== undefined) {
-              properties.size = point.size;
+            if (size !== undefined) {
+              properties.size = size;
             }
             
             return {
@@ -109,29 +145,100 @@ export default function FeltMapComponent({
           })
         };
         
-// Convert your GeoJSON to a File object
-const jsonBlob = new Blob([JSON.stringify(geojson)], { type: "application/geo+json" });
-const geoJsonFile = new File([jsonBlob], "points.geojson", { type: "application/geo+json" });
+        // Convert your GeoJSON to a File object
+        const jsonBlob = new Blob([JSON.stringify(geojson)], { type: "application/geo+json" });
+        const geoJsonFile = new File([jsonBlob], "points.geojson", { type: "application/geo+json" });
 
-const layerResult = await felt.createLayersFromGeoJson({
-  name: `${title} - Data Points`,
-  source: {
-    type: "geoJsonFile",
-    file: geoJsonFile,
-  },
-  geometryStyles: {
-    Point: {
-      paint: { 
-        color: "#4c78a8",
-        size: 6,
-      },
-      config: { labelAttribute: ["name"] },
-      label: { minZoom: 9 },
-    }
-  }
-});
+        // Create initial layer with basic styling
+        const layerResult = await felt.createLayersFromGeoJson({
+          name: `${title} - Data Points`,
+          source: {
+            type: "geoJsonFile",
+            file: geoJsonFile,
+          },
+          geometryStyles: {
+            Point: {
+              paint: { 
+                color: COLOR_PALETTE[0], // Default color - we'll update this with dynamic styling
+                size: 6,
+              },
+              config: { 
+                labelAttribute: ["name"],
+                tooltip: [
+                  {
+                    title: "Name",
+                    value: ["get", "name"]
+                  },
+                  ...(uniqueCategories.length > 0 ? [{
+                    title: "Category",
+                    value: ["coalesce", ["get", "category"], "None"]
+                  }] : [])
+                ]
+              },
+              label: { minZoom: 9 },
+            }
+          }
+        });
 
-        if (layerResult) {
+        // Apply dynamic styling based on point properties
+        if (layerResult && layerResult.layers && layerResult.layers.length > 0) {
+          const layer = layerResult.layers[0];
+          
+          // Get the current style to extend it
+          const currentStyle = { ...layer.style };
+          let shouldUpdateStyle = false;
+          
+          // Update style for categorical coloring if we have categories
+          if (uniqueCategories.length > 0) {
+            // Create a match expression that maps each category to its color
+            (currentStyle as any).paint = {
+              ...(currentStyle as any).paint,
+              color: ["match", ["get", "category"], 
+                // For each category, specify its color
+                ...uniqueCategories.flatMap((category, index) => [
+                  category, 
+                  COLOR_PALETTE[index % COLOR_PALETTE.length]
+                ]),
+                // Default color for points with no category
+                COLOR_PALETTE[0]
+              ]
+            };
+            shouldUpdateStyle = true;
+          }
+          
+          // Add dynamic sizing if we have size data
+          if (hasSizeData) {
+            // Find min and max sizes to normalize
+            const sizes = points
+              .map(p => p.size)
+              .filter((s): s is number => s !== undefined);
+            
+            if (sizes.length > 0) {
+              const minSize = Math.min(...sizes);
+              const maxSize = Math.max(...sizes);
+              
+              // Only apply scaling if we have a range of sizes
+              if (minSize !== maxSize) {
+                (currentStyle as any).paint = {
+                  ...(currentStyle as any).paint,
+                  size: ["interpolate", ["linear"], ["get", "size"], 
+                    minSize, 4,   // Map minimum size to 4px
+                    maxSize, 12   // Map maximum size to 12px
+                  ]
+                };
+                shouldUpdateStyle = true;
+              }
+            }
+          }
+          
+          // Update the layer style if needed
+          if (shouldUpdateStyle) {
+            await felt.setLayerStyle({
+              id: layer.id,
+              style: currentStyle
+            });
+          }
+
           // Get the bounds of all points to fit the viewport
           const pointBounds = calculateBounds(points);
           if (pointBounds) {
@@ -185,8 +292,9 @@ const layerResult = await felt.createLayersFromGeoJson({
       zoom: 12 // Reasonable zoom level for a single point
     });
     
-    // TODO: Select the feature if possible
-    // This would require tracking the layer ID and feature ID
+    // Attempt to select the feature if possible
+    // This would require having the feature ID from the created layer
+    // This is a more advanced feature that could be added later
   };
 
   // Calculate bounds for a set of points
@@ -238,6 +346,20 @@ const layerResult = await felt.createLayersFromGeoJson({
                     <div className="text-sm text-muted-foreground mt-1">
                       {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
                     </div>
+                    {point.color && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <div 
+                          className="w-3 h-3 rounded-full" 
+                          style={{ backgroundColor: getCategoryColor(point.color) }}
+                        />
+                        <span className="text-xs">{point.color}</span>
+                      </div>
+                    )}
+                    {point.size !== undefined && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Size: {point.size}
+                      </div>
+                    )}
                   </div>
                   {index < points.length - 1 && <Separator />}
                 </div>
