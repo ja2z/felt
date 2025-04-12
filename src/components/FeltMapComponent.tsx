@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Felt, FeltController, FeltEmbedOptions } from "@feltmaps/js-sdk";
+import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
 
 // Interface for points to display on the map
 interface MapPoint {
@@ -10,6 +12,7 @@ interface MapPoint {
   label?: string;
   size?: number;
   color?: string;
+  [key: string]: any; // For additional properties
 }
 
 // Component props
@@ -19,7 +22,9 @@ interface FeltMapComponentProps {
   points: MapPoint[];
   showSidebar?: boolean;
   showLegend?: boolean;
-  columnLookup?: Record<string, string>; // Add this prop
+  columnLookup?: Record<string, string>;
+  onPointSelected?: (point: MapPoint | null) => void;
+  onClearSelection?: () => void;
 }
 
 // Predefined color palette for categorical values
@@ -43,12 +48,15 @@ export default function FeltMapComponent({
   showSidebar = true,
   showLegend = false,
   columnLookup = {},
+  onPointSelected,
+  onClearSelection,
 }: FeltMapComponentProps) {
   const [felt, setFelt] = useState<FeltController | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
   const mapRef = useRef<HTMLDivElement>(null);
   const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
+  const customLayerIdRef = useRef<string | null>(null);
 
   // Helper function to get color for a category
   const getCategoryColor = (category: string | undefined): string => {
@@ -119,7 +127,8 @@ export default function FeltMapComponent({
             // Set properties based on point data
             const properties: Record<string, any> = {
               name: label || `Point ${index + 1}`,
-              id: `point-${index}`,
+              pointId: `sigma-point-${index}`, // Custom ID format for our points
+              pointIndex: Number(index), // Store the array index as a number explicitly
             };
 
             // Include the color category if available
@@ -172,20 +181,7 @@ export default function FeltMapComponent({
               },
               config: {
                 labelAttribute: ["name"],
-                /*
-                tooltip: [
-                  {
-                    title: "Name",
-                    value: ["get", "name"]
-                  },
-                  ...(uniqueCategories.length > 0 ? [{
-                    title: "Category",
-                    value: ["coalesce", ["get", "category"], "None"]
-                  }] : [])
-                ]
-                */
               },
-              label: { minZoom: 9 },
             },
           },
         });
@@ -193,6 +189,7 @@ export default function FeltMapComponent({
         // Apply dynamic styling based on point properties
         if (layerResult && layerResult.layers && layerResult.layers.length > 0) {
           const layer = layerResult.layers[0];
+          customLayerIdRef.current = layer.id; // Store the layer ID for later reference
 
           // Get the current style to extend it
           const currentStyle = { ...layer.style };
@@ -281,16 +278,199 @@ export default function FeltMapComponent({
         });
       });
     }
-  }, [felt, points, title]);
+  }, [felt, points, title, columnLookup, showLegend]);
+
+  // Set up the click handler for the map
+  useEffect(() => {
+    if (!felt) return;
+
+    // Setup the click handler
+    const unsubscribe = felt.onPointerClick({
+      handler: async (event) => {
+        // Access the clicked coordinate
+        console.log("Click coordinate:", event.coordinate);
+
+
+
+
+
+
+
+
+
+      // Check if any features are under the cursor
+      if (event.features && event.features.length > 0) {
+        // Log all features found at click point
+        console.log("Features at click point:", event.features);
+        
+        // For each feature, try to get the full GeoJSON feature
+        for (const feature of event.features) {
+          console.log(`Feature ID: ${feature.id}, Layer ID: ${feature.layerId}`);
+          
+          try {
+            // Get the complete GeoJSON feature
+            const geoJsonFeature = await felt.getGeoJsonFeature({
+              id: feature.id,
+              layerId: feature.layerId
+            });
+            
+            console.log("Full GeoJSON feature:", geoJsonFeature);
+            
+            // If this is a feature from our custom layer, try to identify the point
+            if (customLayerIdRef.current && feature.layerId === customLayerIdRef.current) {
+              console.log("Found feature from our custom layer!");
+              
+              // Check if the feature has properties and pointIndex
+              if (geoJsonFeature && 
+                  geoJsonFeature.properties && 
+                  'pointIndex' in geoJsonFeature.properties && 
+                  typeof geoJsonFeature.properties.pointIndex === 'number') {
+                const pointIndex = geoJsonFeature.properties.pointIndex;
+                console.log(`This corresponds to point index: ${pointIndex}`);
+                if (pointIndex >= 0 && pointIndex < points.length) {
+                  console.log("Original point data:", points[pointIndex]);
+                } else {
+                  console.log("Point index out of range:", pointIndex);
+                }
+              } else {
+                console.log("Feature doesn't have a valid pointIndex property:", geoJsonFeature?.properties);
+              }
+            } else {
+              // This is a feature from a base Felt layer, not our custom layer
+              console.log("This is a base Felt map feature, not from our custom layer");
+              console.log("Our custom layer ID is:", customLayerIdRef.current);
+            }
+          } catch (error) {
+            console.error(`Error getting GeoJSON feature for ID ${feature.id}:`, error);
+          }
+        }
+      } else {
+        console.log("No features detected at click point");
+      }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // If available, access GeoJSON features under the click
+        event.features.forEach((feature) => {
+          // Here, feature is a GeoJSON feature with a geometry property
+          console.log("GeoJSON feature properties:", feature.properties);
+        });
+
+        // Log the full event object -- REMOVE THIS EVENTUALLY
+        console.log("Full click event:", event);
+
+        // Check if any features are under the cursor
+        if (!event.features || event.features.length === 0) {
+          // Clicked on empty space, clear selection
+          setSelectedPoint(null);
+          if (onClearSelection) onClearSelection();
+          return;
+        }
+
+        // Find our custom data points from our GeoJSON layer
+        console.log("All features:", event.features);
+        console.log("Current customLayerId:", customLayerIdRef.current);
+
+        // First, try to find a feature from our own layer
+        let matchedFeature = event.features.find(
+          (feature) => customLayerIdRef.current && feature.layerId === customLayerIdRef.current
+        );
+
+        // If we didn't find a feature from our layer, let's check if there's a feature with coordinates
+        // that match any of our points
+        if (!matchedFeature && event.coordinate) {
+          // Get the click coordinates
+          const clickLat = event.coordinate.latitude;
+          const clickLng = event.coordinate.longitude;
+
+          console.log("Click coordinates:", clickLat, clickLng);
+
+          // Find if any of our points are close to the click
+          // Using a small threshold for proximity (you may need to adjust this)
+          const PROXIMITY_THRESHOLD = 0.0001; // roughly 10 meters
+
+          const pointIndex = points.findIndex((point) => {
+            const latDiff = Math.abs(point.latitude - clickLat);
+            const lngDiff = Math.abs(point.longitude - clickLng);
+            return latDiff < PROXIMITY_THRESHOLD && lngDiff < PROXIMITY_THRESHOLD;
+          });
+
+          if (pointIndex !== -1) {
+            console.log("Found matching point by coordinates:", points[pointIndex]);
+
+            if (selectedPoint === pointIndex) {
+              // Deselect if clicking the same point
+              console.log("Deselecting point (already selected)");
+              setSelectedPoint(null);
+              if (onClearSelection) onClearSelection();
+            } else {
+              // Select the new point
+              console.log("Setting selected point to:", pointIndex);
+              setSelectedPoint(pointIndex);
+              if (onPointSelected) {
+                console.log("Calling onPointSelected with:", points[pointIndex]);
+                onPointSelected(points[pointIndex]);
+              }
+            }
+            return;
+          }
+        }
+
+        // If we get here, we didn't find a matching point in our layer
+        // This may be a feature from the base Felt map, so we'll clear selection
+        setSelectedPoint(null);
+        if (onClearSelection) onClearSelection();
+      },
+    });
+
+    // Clean up the event listener when component unmounts or felt changes
+    return () => {
+      unsubscribe();
+    };
+  }, [felt, points, selectedPoint, onPointSelected, onClearSelection]);
 
   // Handle clicking on a point in the sidebar
   const handlePointClick = async (index: number) => {
     if (!felt || !points[index]) return;
 
+    console.log("handlePointClick called with index:", index);
+
+    // If clicking the already selected point, deselect it
+    if (selectedPoint === index) {
+      console.log("Deselecting currently selected point");
+      setSelectedPoint(null);
+      if (onClearSelection) {
+        console.log("Calling onClearSelection");
+        onClearSelection();
+      }
+      return;
+    }
+
+    console.log("Setting selected point to index:", index);
     setSelectedPoint(index);
 
     // Get the point data
     const point = points[index];
+    console.log("Selected point data:", point);
+
+    // Call the callback function with the selected point
+    if (onPointSelected) {
+      console.log("Calling onPointSelected with:", point);
+      onPointSelected(point);
+    }
 
     // Set the viewport to focus on this point
     await felt.setViewport({
@@ -300,10 +480,14 @@ export default function FeltMapComponent({
       },
       zoom: 12, // Reasonable zoom level for a single point
     });
+  };
 
-    // Attempt to select the feature if possible
-    // This would require having the feature ID from the created layer
-    // This is a more advanced feature that could be added later
+  // Handle clearing the selection
+  const handleClearSelection = () => {
+    setSelectedPoint(null);
+    if (onClearSelection) {
+      onClearSelection();
+    }
   };
 
   // Calculate bounds for a set of points
@@ -334,9 +518,16 @@ export default function FeltMapComponent({
       <div className="flex h-full w-full">
         {showSidebar && (
           <div className="w-64 flex-shrink-0 border-r border-border bg-card h-full">
-            <div className="p-4 border-b">
-              <h2 className="text-lg font-semibold">{title}</h2>
-              <p className="text-sm text-muted-foreground">{points.length} data points</p>
+            <div className="p-4 border-b flex justify-between items-center">
+              <div>
+                <h2 className="text-lg font-semibold">{title}</h2>
+                <p className="text-sm text-muted-foreground">{points.length} data points</p>
+              </div>
+              {selectedPoint !== null && (
+                <Button variant="outline" size="sm" onClick={handleClearSelection} title="Clear selection">
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
             </div>
             <ScrollArea className="h-[calc(100%-65px)]">
               {points.map((point, index) => (
@@ -362,6 +553,9 @@ export default function FeltMapComponent({
                     )}
                     {point.size !== undefined && (
                       <div className="text-xs text-muted-foreground mt-1">Size: {point.size}</div>
+                    )}
+                    {selectedPoint === index && (
+                      <div className="mt-2 text-xs text-blue-500">Selected for filtering</div>
                     )}
                   </div>
                   {index < points.length - 1 && <Separator />}

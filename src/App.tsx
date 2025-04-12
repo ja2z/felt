@@ -1,7 +1,7 @@
 import { useMemo, useEffect } from "react";
 import FeltMapComponent from "./components/FeltMapComponent";
 import "./App.css";
-import { client, useConfig, useElementData, useElementColumns } from "@sigmacomputing/plugin";
+import { client, useConfig, useElementData, useElementColumns, useVariable } from "@sigmacomputing/plugin";
 
 // Configure the editor panel with relevant options for the Felt map
 client.config.configureEditorPanel([
@@ -12,6 +12,9 @@ client.config.configureEditorPanel([
   { name: "sizeColumn", type: "column", source: "source", allowMultiple: false },
   { name: "colorColumn", type: "column", source: "source", allowMultiple: false },
   { name: "tooltipColumns", type: "column", source: "source", allowMultiple: true },
+  // Add variables for filtering
+  { name: "filterLatitude", type: "variable" },
+  { name: "filterLongitude", type: "variable" },
   { name: "settings", type: "group" },
   { name: "mapId", source: "settings", type: "text", defaultValue: "xw9BxV0EmdR2u5C4AyrTke9CB" },
   { name: "title", source: "settings", type: "text", defaultValue: "Felt Map" },
@@ -57,6 +60,10 @@ function App() {
   const showSidebar = (client.config.getKey as any)("showSidebar") as boolean;
   const showLegend = (client.config.getKey as any)("showLegend") as boolean;
   const containerPadding = (client.config.getKey as any)("containerPadding") as string;
+
+  // Set up variables for filtering - now properly utilized
+  const [filterLatitude, setFilterLatitude] = useVariable(config.filterLatitude);
+  const [filterLongitude, setFilterLongitude] = useVariable(config.filterLongitude);
 
   // Get column configurations
   const { latitudeColumn, longitudeColumn, labelColumn, sizeColumn, colorColumn } = config;
@@ -164,7 +171,28 @@ function App() {
     sizeColumn,
     colorColumn,
     config.tooltipColumns,
+    filterLatitude,
+    filterLongitude
   ]);
+
+  // Handle point selection for filtering
+  const handlePointSelected = (point: MapPoint | null) => {
+    if (point && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
+      // Set the filter variables with the selected point's coordinates
+      setFilterLatitude(String(point.latitude));
+      setFilterLongitude(String(point.longitude));
+    } else {
+      // Clear the filters if no point is selected
+      setFilterLatitude(null);
+      setFilterLongitude(null);
+    }
+  };
+
+  // Handle clearing the selection
+  const handleClearSelection = () => {
+    setFilterLatitude(null);
+    setFilterLongitude(null);
+  };
 
   return (
     <div className="felt-map-container">
@@ -175,7 +203,9 @@ function App() {
           points={mapPoints}
           showSidebar={showSidebar}
           showLegend={showLegend}
-          columnLookup={columnLookup} // Add this prop
+          columnLookup={columnLookup}
+          onPointSelected={handlePointSelected}
+          onClearSelection={handleClearSelection}
         />
       ) : (
         <div className="felt-loading-message">
